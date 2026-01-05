@@ -1,3 +1,1 @@
-# Long Term Memory
-
-# Short Term Memory
+The user is observing the demo.py file in VS Code, related to the saguaro project. The terminal output shows that the script was executed and logged "Saguaro OS Online. Watching screen..." followed by "Saguaro started. Cortex: {SLM_MODEL}, Neocortex: {LLM_MODEL}". It also indicates that the script is sending requests to a model (gemini-2.5-flash-lite) and receiving responses. There is a warning about non-text parts in the response and a recommendation to use `candidates.parts` accessor for the full response.

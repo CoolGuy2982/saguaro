@@ -93,12 +93,15 @@ class TestSenses(unittest.TestCase):
         async def run_stream():
             streamer = ScreenStreamer(interval=0.1)
             count = 0
-            async for content in streamer.stream():
-                count += 1
-                self.assertIsInstance(content, MockContent)
-                self.assertEqual(content.role, "user")
-                if count >= 2:
-                    break
+            
+            # PATCH ADDED: Ensure the imported types.Content is our MockContent class
+            with patch("saguaro.senses.visual.types.Content", side_effect=MockContent):
+                async for content in streamer.stream():
+                    count += 1
+                    self.assertIsInstance(content, MockContent)
+                    self.assertEqual(content.role, "user")
+                    if count >= 2:
+                        break
         
         # Use asyncio.run to execute the async test
         asyncio.run(run_stream())

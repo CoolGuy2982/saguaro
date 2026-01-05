@@ -129,7 +129,10 @@ Your Goal:
                 # But we created a session with state. We should probably use it.
                 # Let's hope the prompt implies using the session we created.
                 # I will pass session_id to be safe and correct.
-                await runner.run_async(new_message=content, session_id=session_id, user_id="default_user")
+                
+                # FIXED: run_async is an async generator, so we iterate over it
+                async for _ in runner.run_async(new_message=content, session_id=session_id, user_id="default_user"):
+                    pass
                 
                 # Optional: Logging
                 # print(f"Cortex processed content.")
