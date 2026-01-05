@@ -9,34 +9,47 @@ async def update_memory(tool_context: ToolContext, action: str, content: str) ->
 
     Args:
         tool_context: The tool execution context provided by the ADK.
-        action: The action to perform. Either "add_long_term" or "append_short_term".
-        content: The content to write or append to memory.
+        action: "append_short_term" (default) or "forget" (delete specific concept).
+        content: The content to remember or the keyword to forget.
 
     Returns:
-        str: A status message indicating the result of the operation.
+        str: Result status.
     """
     if "memory" not in tool_context.state:
         return "Error: Memory system not accessible."
 
     memory = tool_context.state["memory"]
 
-    if action == "add_long_term":
-        # In a real scenario, this might append to long term section specifically.
-        # For now, per instruction, we use write() or similar, 
-        # but the prompt said "Call memory.write(content)". 
-        # However, earlier memory.write OVERWRITES the file.
-        # "In a real app we'd append, but for now write/append to long term logic"
-        # Let's stick to the prompt's loose instruction but maybe make it safer if possible,
-        # or just follow "Call memory.write(content)".
-        # Actually, let's look at BaseMemory: write(content) overwrites.
-        # If the SLM calls this, it might wipe memory. 
-        # But I must follow instructions: "If action == 'add_long_term': Call memory.write(content)"
-        memory.write(content)
-        return "Long term memory updated (overwritten)."
-
-    elif action == "append_short_term":
+    if action == "append_short_term" or action == "add":
         memory.append_short_term(content)
-        return "Entry appended to short term memory."
+        return "Memory appended (Short Term)."
+
+    elif action == "forget":
+        # New capability: Active Forgetting
+        memory.delete_entry(content)
+        return f"Removed memories containing: '{content}'"
 
     else:
         return f"Error: Unknown action '{action}'."
+
+async def retrieve_context(tool_context: ToolContext, lookback_seconds: int = 60) -> str:
+    """
+    Retrieves raw sensory data from the recent past (Sliding Window).
+    Useful if the agent needs to see what happened just before the current event.
+
+    Args:
+        tool_context: Context.
+        lookback_seconds: How far back to look (default 60s).
+
+    Returns:
+        str: Summary of context items.
+    """
+    if "context_buffer" not in tool_context.state:
+        return "Error: Context Buffer not accessible."
+
+    buffer = tool_context.state["context_buffer"]
+    items = buffer.get_recent(seconds=lookback_seconds)
+    
+    # In a real scenario, if items are images, we might return "X images found".
+    # Since we return text to the model, we summarize.
+    return f"Retrieved {len(items)} context items from last {lookback_seconds} seconds."

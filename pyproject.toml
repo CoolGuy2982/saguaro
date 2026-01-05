@@ -1,10 +1,12 @@
 [project]
 name = "saguaro"
-version = "0.1.0"
+version = "0.2.0"
+description = "A neuro-symbolic proactive OS library."
 dependencies = [
     "google-adk>=0.1.0",
     "litellm",
     "pydantic",
     "mss",
-    "Pillow"
+    "Pillow",
+    "pynput"
 ]

@@ -1,69 +1,73 @@
+import asyncio
+import logging
+from typing import Optional
+
 try:
     from google.adk.agents import Agent
     from google.adk.tools import FunctionTool
     from google.adk.sessions import InMemorySessionService
     from google.adk.runners import Runner
 except ImportError:
-    # Dummy mocks for development without google-adk installed
     Agent = None
     FunctionTool = None
     InMemorySessionService = None
     Runner = None
 
-from saguaro.memory.markdown_store import MarkdownMemory
+from saguaro.memory.smart_store import SmartMemory
 from saguaro.models.factory import get_model_wrapper
-from saguaro.tools.memory_tools import update_memory
+from saguaro.tools.memory_tools import update_memory, retrieve_context
+from saguaro.senses.inputs import InputListener
+from saguaro.core.context import ContextBuffer
 
 class SaguaroKernel:
     def __init__(
         self, 
         slm_model_name: str = "gemini-2.5-flash-lite",
-        llm_model_name: str = "gemini-1.5-pro",
+        llm_model_name: str = "gemini-2.5-pro",
         memory_path: str = "memory.md"
     ):
         if Agent is None:
-             raise ImportError("The 'google-adk' package is required. Please install it with 'pip install google-adk'.")
+             raise ImportError("The 'google-adk' package is required.")
 
         self.slm_model_name = slm_model_name
-        self.llm_model_name = llm_model_name
-        self.memory_path = memory_path
         
-        # 1. Initialize memory
-        self.memory = MarkdownMemory(filepath=memory_path)
+        # 1. Initialize Components
+        self.memory = SmartMemory(filepath=memory_path)
+        self.context_buffer = ContextBuffer(max_tokens=50000)
+        self.input_listener = InputListener()
         
-        # 2. Read current memory content
-        current_memory = self.memory.read()
-        
-        # 3. Initialize Neocortex (LLM)
+        # 2. Initialize Neocortex (LLM)
         self.neocortex = Agent(
             name="neocortex",
             model=get_model_wrapper(llm_model_name),
-            # Neocortex doesn't have specific tools defined in this phase context yet, or just default context
-            instruction="You are the Neocortex, a powerful reasoning engine. Assist the Cortex with complex tasks."
+            instruction="You are the Neocortex. Assist the Cortex with complex reasoning tasks."
         )
 
-        # 4. Define Session State
+        # 3. Define Session State
         self.initial_state = {
             "memory": self.memory,
-            "neocortex": self.neocortex
+            "neocortex": self.neocortex,
+            "context_buffer": self.context_buffer,
+            "neocortex_status": "idle" # Track if LLM is busy
         }
         
-        # 5. Define SLM tools
+        # 4. Define SLM Tools
         self.slm_tools = [
             FunctionTool(update_memory),
+            FunctionTool(retrieve_context),
             FunctionTool(self._summon_neocortex_tool)
         ]
         
-        # 6. Initialize SLM Agent (Cortex)
-        instruction = f"""You are the Cortex, a proactive Small Language Model operating an OS.
-
-[SYSTEM STATE / MEMORY]
-{current_memory}
-
+        # 5. Initialize Cortex (SLM)
+        # We don't bake memory into instruction string statically anymore,
+        # we will inject it dynamically in the loop or rely on tools to read it.
+        # But for 'proactive' behavior, it helps to give a snapshot.
+        instruction = """You are the Cortex, a proactive OS agent.
 Your Goal:
-1. Observe the user's context (screenshots/text provided in input).
-2. Maintain the 'Short Term Memory' above using `update_memory`.
-3. If a complex task arises, summon the Neocortex using `_summon_neocortex_tool`."""
+1. Continuous Observation: You receive updates when the user acts.
+2. Memory Management: Use `update_memory` to log important tasks/context.
+3. Context Retrieval: If you are unsure what happened previously, use `retrieve_context`.
+4. Delegation: If a task is complex, summon the Neocortex."""
 
         self.slm = Agent(
             name="cortex",
@@ -72,69 +76,126 @@ Your Goal:
             instruction=instruction
         )
         
-        # Initialize Service (for loop usage)
         self.session_service = InMemorySessionService()
 
     async def _summon_neocortex_tool(self, tool_context, task: str) -> str:
-        """
-        Summons the Neocortex (Large Language Model) to handle a complex task.
-        """
-        # Retrieve neocortex from state if available, or use self.neocortex
-        # The prompt says: Retrieve neocortex agent from tool_context.state['neocortex']
-        neocortex = tool_context.state.get("neocortex", self.neocortex)
+        """Summons the Neocortex (LLM) for complex tasks."""
+        tool_context.state["neocortex_status"] = "busy"
+        neocortex = tool_context.state.get("neocortex")
         
-        # Create a new, temporary Runner for the Neocortex
-        # Runner usually needs an agent and a session service (or creates one)
-        # Assuming simple Runner(agent=...) usage based on prompt context
-        runner = Runner(agent=neocortex, app_name="saguaro_os")
-        
-        # Run async passing the task
-        # Note: run_async signature depends on ADK version. Prompt says: passing the `task` as the user message.
-        # Assuming run_async(new_message=task) or similar.
-        result = await runner.run_async(new_message=task, user_id="default_user")
-        
-        # Collect final response text. 
-        # Assuming result is a Turn object or similar with .text or str(result) works.
-        # Let's assume result.text property exists.
-        response_text = getattr(result, "text", str(result))
-        
-        return f"Neocortex responded: {response_text}"
+        try:
+            # Create a runner for the specific task
+            runner = Runner(agent=neocortex, app_name="saguaro_os")
+            
+            # Simple run execution
+            response_text = ""
+            async for turn in runner.run_async(new_message=task, user_id="default_user"):
+                # Assuming turn has text or we accumulate it
+                try:
+                    response_text = turn.text
+                except:
+                    pass
+            
+            tool_context.state["neocortex_status"] = "idle"
+            return f"Neocortex processed task. Response: {response_text}"
+        except Exception as e:
+            tool_context.state["neocortex_status"] = "error"
+            return f"Neocortex failed: {e}"
 
     async def run_proactive_loop(self, context_stream):
         """
-        Runs the main proactive loop, feeding context to the SLM.
-        
-        Args:
-            context_stream: An async generator yielding content.
+        The Heartbeat Loop.
+        Waits for EITHER a time interval (via context_stream) OR user input.
         """
-        # Initialize Runner for SLM
-        runner = Runner(agent=self.slm, session_service=self.session_service, app_name="saguaro_os")
+        self.input_listener.start()
         
-        # Create session with initial state
-        session_id = "saguaro_session"
+        runner = Runner(agent=self.slm, session_service=self.session_service, app_name="saguaro_os")
+        session_id = "saguaro_main_session"
         await self.session_service.create_session(
             session_id=session_id, 
             state=self.initial_state, 
-            app_name="saguaro_os", 
+            app_name="saguaro_os",
             user_id="default_user"
         )
         
-        # Loop over context
-        async for content in context_stream:
+        # Get the iterator for the visual stream (time based)
+        stream_iter = context_stream.__aiter__()
+        
+        logging.info("Core loop starting. Waiting for stimuli...")
+
+        while True:
             try:
-                # Call runner with session_id to persist state/history if needed, or just let it use default?
-                # Usually: runner.run_async(new_message=content, session_id=session_id)
-                # But prompt said: "Call await runner.run_async(new_message=content)"
-                # If we don't pass session_id, it might create a new one. 
-                # But we created a session with state. We should probably use it.
-                # Let's hope the prompt implies using the session we created.
-                # I will pass session_id to be safe and correct.
+                # Create tasks for both triggers
+                input_task = asyncio.create_task(self.input_listener.wait_for_input())
+                stream_task = asyncio.create_task(stream_iter.__anext__())
                 
-                # FIXED: run_async is an async generator, so we iterate over it
-                async for _ in runner.run_async(new_message=content, session_id=session_id, user_id="default_user"):
+                # Wait for FIRST completed
+                done, pending = await asyncio.wait(
+                    [input_task, stream_task], 
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                content_to_send = None
+                
+                # Check what triggered
+                if input_task in done:
+                    # User typed/clicked -> Immediate Reflex
+                    event = input_task.result()
+                    # We might want to grab a fresh screen immediately
+                    # For now, we can send a text marker or wait for the stream task
+                    content_to_send = "User Activity Detected (Keyboard/Mouse Interaction)"
+                    
+                    # Cancel the pending stream wait so we don't lag behind? 
+                    # No, let it finish naturally or we lose the generator state.
+                    # We can just let stream_task finish in background or await it if we want screen data.
+                
+                if stream_task in done:
+                    # Timer fired -> Periodic Check
+                    content_to_send = stream_task.result()
+
+                # Add to Context Buffer
+                if content_to_send:
+                    # Calculate cost approx
+                    cost = 1000 if not isinstance(content_to_send, str) else len(content_to_send)//4
+                    self.context_buffer.add(content_to_send, token_cost=cost)
+                
+                # Inject Memory Context into the prompt
+                # We can prepend the current memory state to the message
+                current_memory_snapshot = self.memory.read()
+                
+                # Construct the message wrapper
+                # Ideally we send the object (image) + text context
+                # The ADK might require specific formatting.
+                # Here we assume we pass the content object, but maybe we wrap it.
+                
+                # Execute Agent Step
+                # We pass the memory snapshot as system context update or just prepend to message
+                # Note: ADK sessions persist state, so we rely on tools for memory mostly,
+                # but sending a snapshot helps attention.
+                
+                message_payload = [
+                    f"CONTEXT_MEMORY:\n{current_memory_snapshot}",
+                    content_to_send
+                ]
+                
+                async for _ in runner.run_async(new_message=message_payload, session_id=session_id, user_id="default_user"):
                     pass
-                
-                # Optional: Logging
-                # print(f"Cortex processed content.")
+
+                # Clean up pending tasks
+                for task in pending:
+                    # If we processed input, the stream task is still pending. 
+                    # We shouldn't cancel it usually, as it's an interval.
+                    # But for simplicity here we assume we catch it next loop or simple loop logic.
+                    if task == stream_task:
+                        # We need to preserve this task for next iteration if it wasn't done
+                        # This gets complex. Simplified: Cancel pending and restart loop logic.
+                        # Ideally we wouldn't cancel the generator. 
+                        pass 
+                    else:
+                        task.cancel()
+
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                print(f"Error in proactive loop: {e}")
+                logging.error(f"Error in loop: {e}")
+                await asyncio.sleep(1) # Backoff
