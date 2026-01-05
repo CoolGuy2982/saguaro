@@ -1,0 +1,10 @@
+[project]
+name = "saguaro"
+version = "0.1.0"
+dependencies = [
+    "google-adk>=0.1.0",
+    "litellm",
+    "pydantic",
+    "mss",
+    "Pillow"
+]
