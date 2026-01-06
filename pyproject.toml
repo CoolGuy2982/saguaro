@@ -1,7 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "saguaro"
 version = "0.2.0"
 description = "A neuro-symbolic proactive OS library."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Omkar Mamidpalliwar"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "google-adk>=0.1.0",
     "litellm",
@@ -10,3 +25,7 @@ dependencies = [
     "Pillow",
     "pynput"
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/coolguy2982/saguaro"
+"Bug Tracker" = "https://github.com/coolguy2982/saguaro/issues"
