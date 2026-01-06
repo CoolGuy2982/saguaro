@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 try:
     from google.adk.agents import Agent
@@ -26,7 +26,8 @@ class SaguaroKernel:
         slm_model_name: str = "gemini-2.5-flash-lite",
         llm_model_name: str = "gemini-2.5-pro",
         memory_path: str = "memory.md",
-        memory_backend: Optional[BaseMemory] = None
+        memory_backend: Optional[BaseMemory] = None,
+        nervous_system: Optional[Any] = None
     ):
         """
         Initialize the Saguaro Kernel.
@@ -37,13 +38,16 @@ class SaguaroKernel:
             memory_path: Default local file path if no backend is provided.
             memory_backend: Custom memory storage instance (e.g. Firestore, Redis).
                             Must inherit from BaseMemory.
+            nervous_system: Custom input event listener (e.g. WebSocket handler).
+                            Must implement .start() and async .wait_for_input().
+                            Defaults to local Keyboard/Mouse listener if None.
         """
         if Agent is None:
              raise ImportError("The 'google-adk' package is required.")
 
         self.slm_model_name = slm_model_name
         
-        # 1. Initialize Components
+        # 1. Initialize Memory
         # Dependency Injection: Use provided backend or fall back to SmartMemory
         if memory_backend:
             self.memory = memory_backend
@@ -51,16 +55,22 @@ class SaguaroKernel:
             self.memory = SmartMemory(filepath=memory_path)
 
         self.context_buffer = ContextBuffer(max_tokens=50000)
-        self.input_listener = InputListener()
         
-        # 2. Initialize Neocortex (LLM)
+        # 2. Initialize Nervous System (Inputs)
+        # Dependency Injection: Use provided input system or fall back to local InputListener
+        if nervous_system:
+            self.input_listener = nervous_system
+        else:
+            self.input_listener = InputListener()
+        
+        # 3. Initialize Neocortex (LLM)
         self.neocortex = Agent(
             name="neocortex",
             model=get_model_wrapper(llm_model_name),
             instruction="You are the Neocortex. Assist the Cortex with complex reasoning tasks."
         )
 
-        # 3. Define Session State
+        # 4. Define Session State
         self.initial_state = {
             "memory": self.memory,
             "neocortex": self.neocortex,
@@ -68,14 +78,14 @@ class SaguaroKernel:
             "neocortex_status": "idle" # Track if LLM is busy
         }
         
-        # 4. Define SLM Tools
+        # 5. Define SLM Tools
         self.slm_tools = [
             FunctionTool(update_memory),
             FunctionTool(retrieve_context),
             FunctionTool(self._summon_neocortex_tool)
         ]
         
-        # 5. Initialize Cortex (SLM)
+        # 6. Initialize Cortex (SLM)
         instruction = """You are the Cortex, a proactive OS agent.
 Your Goal:
 1. Continuous Observation: You receive updates when the user acts.
@@ -121,7 +131,9 @@ Your Goal:
         The Heartbeat Loop.
         Waits for EITHER a time interval (via context_stream) OR user input.
         """
-        self.input_listener.start()
+        # Start the listener (custom or default)
+        if hasattr(self.input_listener, 'start'):
+            self.input_listener.start()
         
         runner = Runner(agent=self.slm, session_service=self.session_service, app_name="saguaro_os")
         session_id = "saguaro_main_session"
@@ -153,15 +165,10 @@ Your Goal:
                 
                 # Check what triggered
                 if input_task in done:
-                    # User typed/clicked -> Immediate Reflex
-                    event = input_task.result()
-                    # We might want to grab a fresh screen immediately
-                    # For now, we can send a text marker or wait for the stream task
-                    content_to_send = "User Activity Detected (Keyboard/Mouse Interaction)"
-                    
-                    # Cancel the pending stream wait so we don't lag behind? 
-                    # No, let it finish naturally or we lose the generator state.
-                    # We can just let stream_task finish in background or await it if we want screen data.
+                    # Generic Input Trigger:
+                    # Pass the raw result through. This supports text, objects, 
+                    # audio bytes, or images provided by the backend nervous system.
+                    content_to_send = input_task.result()
                 
                 if stream_task in done:
                     # Timer fired -> Periodic Check
@@ -178,6 +185,7 @@ Your Goal:
                 current_memory_snapshot = self.memory.read()
                 
                 # Construct the message wrapper
+                # The ADK Runner handles lists of mixed content (Text, Images, Blobs)
                 message_payload = [
                     f"CONTEXT_MEMORY:\n{current_memory_snapshot}",
                     content_to_send
