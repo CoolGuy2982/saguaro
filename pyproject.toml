@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "saguaro"
-version = "0.2.0"
+version = "0.0.1a2"
 description = "A neuro-symbolic proactive OS library."
 readme = "README.md"
 requires-python = ">=3.9"
