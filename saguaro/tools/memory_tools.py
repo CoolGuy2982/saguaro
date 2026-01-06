@@ -50,6 +50,4 @@ async def retrieve_context(tool_context: ToolContext, lookback_seconds: int = 60
     buffer = tool_context.state["context_buffer"]
     items = buffer.get_recent(seconds=lookback_seconds)
     
-    # In a real scenario, if items are images, we might return "X images found".
-    # Since we return text to the model, we summarize.
     return f"Retrieved {len(items)} context items from last {lookback_seconds} seconds."

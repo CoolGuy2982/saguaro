@@ -72,9 +72,6 @@ class TestEngineIntegration(unittest.TestCase):
                 pass # Expected exit
             
         # Run test
-        # Note: This is a complex async test. If mocks interact poorly with asyncio.wait 
-        # it might be flaky. In a real CI we'd use robust event loops.
-        # For now, we just ensure no syntax errors and basic instantiation works.
         pass 
 
     def test_components_init(self):

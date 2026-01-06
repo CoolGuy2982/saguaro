@@ -13,6 +13,7 @@ except ImportError:
     InMemorySessionService = None
     Runner = None
 
+from saguaro.memory.base import BaseMemory
 from saguaro.memory.smart_store import SmartMemory
 from saguaro.models.factory import get_model_wrapper
 from saguaro.tools.memory_tools import update_memory, retrieve_context
@@ -24,15 +25,31 @@ class SaguaroKernel:
         self, 
         slm_model_name: str = "gemini-2.5-flash-lite",
         llm_model_name: str = "gemini-2.5-pro",
-        memory_path: str = "memory.md"
+        memory_path: str = "memory.md",
+        memory_backend: Optional[BaseMemory] = None
     ):
+        """
+        Initialize the Saguaro Kernel.
+
+        Args:
+            slm_model_name: Name of the SLM (Cortex).
+            llm_model_name: Name of the LLM (Neocortex).
+            memory_path: Default local file path if no backend is provided.
+            memory_backend: Custom memory storage instance (e.g. Firestore, Redis).
+                            Must inherit from BaseMemory.
+        """
         if Agent is None:
              raise ImportError("The 'google-adk' package is required.")
 
         self.slm_model_name = slm_model_name
         
         # 1. Initialize Components
-        self.memory = SmartMemory(filepath=memory_path)
+        # Dependency Injection: Use provided backend or fall back to SmartMemory
+        if memory_backend:
+            self.memory = memory_backend
+        else:
+            self.memory = SmartMemory(filepath=memory_path)
+
         self.context_buffer = ContextBuffer(max_tokens=50000)
         self.input_listener = InputListener()
         
@@ -59,9 +76,6 @@ class SaguaroKernel:
         ]
         
         # 5. Initialize Cortex (SLM)
-        # We don't bake memory into instruction string statically anymore,
-        # we will inject it dynamically in the loop or rely on tools to read it.
-        # But for 'proactive' behavior, it helps to give a snapshot.
         instruction = """You are the Cortex, a proactive OS agent.
 Your Goal:
 1. Continuous Observation: You receive updates when the user acts.
@@ -164,15 +178,6 @@ Your Goal:
                 current_memory_snapshot = self.memory.read()
                 
                 # Construct the message wrapper
-                # Ideally we send the object (image) + text context
-                # The ADK might require specific formatting.
-                # Here we assume we pass the content object, but maybe we wrap it.
-                
-                # Execute Agent Step
-                # We pass the memory snapshot as system context update or just prepend to message
-                # Note: ADK sessions persist state, so we rely on tools for memory mostly,
-                # but sending a snapshot helps attention.
-                
                 message_payload = [
                     f"CONTEXT_MEMORY:\n{current_memory_snapshot}",
                     content_to_send
